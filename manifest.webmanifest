@@ -2,6 +2,7 @@
   "name": "한 끼 칼로리",
   "short_name": "칼로리",
   "description": "음식 사진을 찍으면 대략적인 칼로리를 계산해 기록하는 앱",
+  "id": "/kcal-app/",
   "lang": "ko",
   "start_url": "./",
   "scope": "./",

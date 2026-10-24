@@ -972,6 +972,23 @@ for (const b of document.querySelectorAll('#trendTabs button')) {
 $('camInput').onchange = (ev) => { onPhoto(ev.target.files[0]); ev.target.value = ''; };
 $('galInput').onchange = (ev) => { onPhoto(ev.target.files[0]); ev.target.value = ''; };
 
+// 크롬이 "설치 가능"이라고 알려주면 설치 카드를 보여 줌 (이미 설치된 앱으로 열렸으면 안 뜸)
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (ev) => {
+  ev.preventDefault();
+  installPrompt = ev;
+  $('installCard').classList.remove('hidden');
+});
+$('installBtn').onclick = async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  const { outcome } = await installPrompt.userChoice;
+  installPrompt = null;
+  $('installCard').classList.add('hidden');
+  if (outcome === 'accepted') toast('설치했어요! 홈 화면의 "칼로리" 아이콘으로 열어 주세요.', 4000);
+};
+window.addEventListener('appinstalled', () => $('installCard').classList.add('hidden'));
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
 loadFoodDB().catch(() => { foodDB = null; }); // 직접 입력 검색이 바로 되도록 미리 불러 둠
