@@ -48,7 +48,33 @@ header h1 { font-size: 20px; margin: 0; }
 .bar.over > div { background: var(--warn); }
 .remain { color: var(--sub); font-size: 14px; margin-top: 6px; }
 
-.actions { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.actions .wide { grid-column: span 2; }
+.actions .btn { padding: 13px 4px; font-size: 15px; }
+.macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.macros span { display: block; font-size: 12px; color: var(--sub); }
+.macros b { font-size: 15px; }
+.pbar { height: 4px; background: var(--line); border-radius: 99px; margin-top: 4px; overflow: hidden; }
+.pbar > div { height: 100%; background: var(--good); }
+.card-head { display: flex; justify-content: space-between; align-items: center; }
+.card-head h3 { margin: 0; font-size: 15px; color: var(--sub); }
+.tabs { display: flex; gap: 4px; background: var(--bg); border-radius: 10px; padding: 3px; }
+.tabs button { padding: 5px 12px; border-radius: 8px; font-size: 13px; }
+.tabs button.on { background: var(--card); font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.chart-title { font-size: 12px; color: var(--sub); margin: 12px 0 2px; }
+.chart { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .kbar { fill: var(--accent); }
+.chart .kbar.over { fill: var(--warn); }
+.chart .goal { stroke: var(--sub); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart .axis { fill: var(--sub); font-size: 10px; }
+.chart .axis.strong { fill: var(--text); font-weight: 700; font-size: 11px; }
+.chart .wline { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.chart .wdot { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.chart .hit { fill: transparent; cursor: pointer; }
+.small-btn { padding: 8px 12px; font-size: 13px; }
+.report { white-space: pre-line; line-height: 1.6; font-size: 14px; margin: 12px 0 4px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.grid2 .field { margin: 8px 0; }
 .btn { border-radius: 14px; padding: 14px 10px; font-weight: 700; background: var(--card); border: 1px solid var(--line); }
 .btn.primary { background: var(--accent); color: #fff; border: 0; }
 .btn:active { transform: scale(.98); }
@@ -89,6 +115,8 @@ header h1 { font-size: 20px; margin: 0; }
 .tag.t-식약처 { background: #DCEFDD; color: #24692A; }
 .tag.t-웹검색 { background: #DCE8F7; color: #1F4F8A; }
 .tag.t-AI추정 { background: #FBE9CF; color: #8A5A12; }
+.tag.t-바코드, .tag.t-영양표 { background: #E9E1F7; color: #55358F; }
+.note:empty { display: none; }
 .suggest { position: absolute; left: 0; right: 0; top: 42px; z-index: 5; background: var(--card); border: 1px solid var(--line);
   border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.15); overflow: hidden; }
 .suggest button { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 10px 12px; text-align: left; border-top: 1px solid var(--line); font-size: 14px; }
@@ -140,6 +168,11 @@ header h1 { font-size: 20px; margin: 0; }
   <div class="total"><span class="num" id="totalNum">0</span><span class="goal" id="goalLabel">/ 2000 kcal</span></div>
   <div class="bar" id="bar"><div id="barFill" style="width:0"></div></div>
   <div class="remain" id="remain"></div>
+  <div class="macros">
+    <div><span>탄수화물</span><b id="macroCarb">0g</b></div>
+    <div><span>단백질</span><b id="macroProtein">0g</b><div class="pbar"><div id="proteinFill" style="width:0"></div></div></div>
+    <div><span>지방</span><b id="macroFat">0g</b></div>
+  </div>
 </section>
 
 <button class="card weight-card" id="weightCard">
@@ -149,18 +182,38 @@ header h1 { font-size: 20px; margin: 0; }
 </button>
 
 <div class="actions">
-  <button class="btn primary" id="camBtn">📷 사진 찍기</button>
+  <button class="btn primary wide" id="camBtn">📷 사진 찍기</button>
   <button class="btn" id="galBtn">🖼️ 앨범</button>
+  <button class="btn" id="repeatBtn">🔁 다시</button>
+  <button class="btn" id="barcodeBtn">🏷️ 바코드</button>
   <button class="btn" id="manualBtn">✏️ 직접</button>
 </div>
 <input type="file" id="camInput" accept="image/*" capture="environment" class="hidden">
 <input type="file" id="galInput" accept="image/*" class="hidden">
+<input type="file" id="barcodeInput" accept="image/*" capture="environment" class="hidden">
+<input type="file" id="labelInput" accept="image/*" capture="environment" class="hidden">
 
 <div id="meals"></div>
 
+<section class="card" id="trendCard">
+  <div class="card-head">
+    <h3>추이</h3>
+    <div class="tabs" id="trendTabs"><button class="on" data-days="7">7일</button><button data-days="30">30일</button></div>
+  </div>
+  <p class="chart-title">섭취 칼로리 (kcal)</p>
+  <svg class="chart" id="trendKcal" viewBox="0 0 340 120" role="img" aria-label="날짜별 섭취 칼로리 막대그래프"></svg>
+  <p class="chart-title">체중 (kg)</p>
+  <svg class="chart" id="trendKg" viewBox="0 0 340 100" role="img" aria-label="날짜별 체중 선그래프"></svg>
+  <p class="small" id="trendTip"></p>
+</section>
+
 <section class="card">
-  <h3 style="margin:0;font-size:15px;color:var(--sub)">최근 7일</h3>
-  <div class="week" id="week"></div>
+  <div class="card-head">
+    <h3>주간 리포트</h3>
+    <button class="btn small-btn" id="reportBtn">✨ 리포트 받기</button>
+  </div>
+  <p class="report" id="reportText"></p>
+  <p class="small" id="reportMeta"></p>
 </section>
 
 <!-- 기록 추가·수정 시트 -->
@@ -184,6 +237,7 @@ header h1 { font-size: 20px; margin: 0; }
         <button class="btn" id="addItem" style="width:100%;padding:10px">+ 음식 추가</button>
       </div>
       <div class="sum"><span>합계</span><span id="entrySum">0 kcal</span></div>
+      <p class="small" id="entryMacro" style="margin:-6px 0 0;text-align:right"></p>
       <div class="note hidden" id="aiNote"></div>
     </div>
     <div class="row-btns">
@@ -217,6 +271,16 @@ header h1 { font-size: 20px; margin: 0; }
   </div>
 </div>
 
+<!-- 다시 먹기 시트 -->
+<div class="sheet-bg hidden" id="repeatSheet">
+  <div class="sheet">
+    <h2>🔁 다시 먹기</h2>
+    <p class="small" style="margin-top:-6px">자주 먹은 순서예요. 누르면 지금 시간으로 바로 기록돼요.</p>
+    <div id="repeatList"></div>
+    <div class="row-btns"><button class="btn" id="repeatClose">닫기</button></div>
+  </div>
+</div>
+
 <!-- 설정 시트 -->
 <div class="sheet-bg hidden" id="settingsSheet">
   <div class="sheet">
@@ -224,7 +288,33 @@ header h1 { font-size: 20px; margin: 0; }
     <div class="field">
       <label>하루 목표 칼로리</label>
       <input id="goalInput" type="number" inputmode="numeric" min="500" step="50">
+      <label class="switch" style="margin-top:10px"><input type="checkbox" id="autoGoalInput"> 키·나이·체중으로 자동 계산</label>
     </div>
+    <div id="profileFields" class="hidden">
+      <div class="grid2">
+        <div class="field"><label>성별</label><select id="sexInput"><option value="male">남성</option><option value="female">여성</option></select></div>
+        <div class="field"><label>태어난 해</label><input id="birthInput" type="number" inputmode="numeric" min="1930" max="2020"></div>
+        <div class="field"><label>키 (cm)</label><input id="heightInput" type="number" inputmode="decimal" min="100" max="230"></div>
+        <div class="field"><label>활동량</label>
+          <select id="activityInput">
+            <option value="1.2">거의 안 움직임</option>
+            <option value="1.375">가벼운 활동 (주 1~3회 운동)</option>
+            <option value="1.55">보통 (주 3~5회 운동)</option>
+            <option value="1.725">많음 (거의 매일 운동)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>목표</label>
+        <select id="paceInput">
+          <option value="-0.75">주 0.75kg 감량</option>
+          <option value="-0.5">주 0.5kg 감량</option>
+          <option value="-0.25">주 0.25kg 감량</option>
+          <option value="0">유지</option>
+          <option value="0.25">주 0.25kg 증량</option>
+        </select>
+      </div>
+    </div>
+    <p class="note" id="goalPreview" style="margin-top:0"></p>
     <div class="field">
       <label>Claude API 키 (이 폰에만 저장돼요)</label>
       <input id="keyInput" type="password" autocomplete="off" placeholder="sk-ant-...">

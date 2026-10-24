@@ -45,7 +45,8 @@ def main():
         serving = num(r.get('FOOD_SIZE'))
         brand = r.get('REST_NM') or ''
         brand = '' if brand == '해당없음' else brand
-        rec = [name, brand, round(kcal, 1), unit, round(serving, 1), origin_short(r.get('FOOD_ORIGIN_NM') or '')]
+        rec = [name, brand, round(kcal, 1), unit, round(serving, 1), origin_short(r.get('FOOD_ORIGIN_NM') or ''),
+               round(num(r.get('CHOCDF')), 1), round(num(r.get('PROT')), 1), round(num(r.get('FATCE')), 1)]
         key = tuple(rec)
         if key in seen:
             continue
@@ -55,7 +56,7 @@ def main():
     meta = {
         'source': '식품의약품안전처 전국통합식품영양성분정보(음식)표준데이터 (data.go.kr 15100070)',
         'basis': max((r.get('CRTR_YMD') or '') for r in rows),
-        'cols': ['name', 'brand', 'kcal_per_100', 'unit', 'serving', 'origin'],
+        'cols': ['name', 'brand', 'kcal_per_100', 'unit', 'serving', 'origin', 'carb_per_100', 'protein_per_100', 'fat_per_100'],
     }
     os.makedirs(os.path.join(ROOT, 'data'), exist_ok=True)
     dst = os.path.join(ROOT, 'data', 'foods.json')

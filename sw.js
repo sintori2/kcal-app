@@ -1,5 +1,5 @@
 // 오프라인에서도 앱 화면이 열리도록 기본 파일을 캐시한다. (API 호출은 캐시하지 않음)
-const CACHE = 'kcal-v3';
+const CACHE = 'kcal-v4';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './data/foods.json', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -16,7 +16,7 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.hostname === 'api.anthropic.com') return;
+  if (e.request.method !== 'GET' || url.hostname === 'api.anthropic.com' || url.hostname.endsWith('openfoodfacts.org')) return;
   // 같은 출처 파일: 네트워크 우선(업데이트 바로 반영), 실패하면 캐시
   if (url.origin === location.origin) {
     e.respondWith(
