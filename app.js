@@ -15,19 +15,22 @@ function safeJSON(s, fallback) { try { return s ? JSON.parse(s) : fallback; } ca
 
 // ---------- 기록 저장소 (IndexedDB) ----------
 const dbReady = new Promise((resolve, reject) => {
-  const req = indexedDB.open('kcal', 1);
+  const req = indexedDB.open('kcal', 2);
   req.onupgradeneeded = () => {
-    const store = req.result.createObjectStore('entries', { keyPath: 'id' });
-    store.createIndex('date', 'date');
+    const db = req.result;
+    // v1: 음식 기록, v2: 체중 기록
+    for (const name of ['entries', 'weights']) {
+      if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: 'id' }).createIndex('date', 'date');
+    }
   };
   req.onsuccess = () => resolve(req.result);
   req.onerror = () => reject(req.error);
 });
-async function tx(mode, fn) {
+async function tx(mode, fn, storeName = 'entries') {
   const db = await dbReady;
   return new Promise((resolve, reject) => {
-    const t = db.transaction('entries', mode);
-    const result = fn(t.objectStore('entries'));
+    const t = db.transaction(storeName, mode);
+    const result = fn(t.objectStore(storeName));
     t.oncomplete = () => resolve(result && 'result' in result ? result.result : undefined);
     t.onerror = () => reject(t.error);
   });
@@ -36,6 +39,9 @@ const putEntry = (e) => tx('readwrite', (s) => s.put(e));
 const deleteEntry = (id) => tx('readwrite', (s) => s.delete(id));
 const entriesOn = (date) => tx('readonly', (s) => s.index('date').getAll(date));
 const allEntries = () => tx('readonly', (s) => s.getAll());
+const putWeight = (w) => tx('readwrite', (s) => s.put(w), 'weights');
+const deleteWeight = (id) => tx('readwrite', (s) => s.delete(id), 'weights');
+const allWeights = () => tx('readonly', (s) => s.getAll(), 'weights');
 
 // ---------- 날짜 ----------
 const pad = (n) => String(n).padStart(2, '0');
@@ -95,6 +101,22 @@ async function render() {
     wrap.appendChild(sec);
   }
   renderWeek();
+  renderWeight();
+}
+
+async function renderWeight() {
+  const list = (await allWeights()).sort((a, b) => b.at - a.at);
+  const latest = list[0];
+  $('weightNum').textContent = latest ? latest.kg.toFixed(2) : '–';
+  if (!latest) { $('weightMeta').textContent = '체중계에 올라가 첫 기록을 남겨 보세요'; return; }
+  const d = new Date(latest.at);
+  const weekAgo = list.find((w) => w.at <= latest.at - 6 * 864e5);
+  let diff = '';
+  if (weekAgo) {
+    const delta = latest.kg - weekAgo.kg;
+    diff = ` · 일주일 전보다 ${delta > 0 ? '+' : ''}${delta.toFixed(1)}kg`;
+  }
+  $('weightMeta').textContent = `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())} 측정${diff}`;
 }
 
 async function renderWeek() {
@@ -476,7 +498,7 @@ $('closeSettings').onclick = () => {
   render();
 };
 $('exportBtn').onclick = async () => {
-  const blob = new Blob([JSON.stringify({ version: 1, entries: await allEntries() })], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ version: 2, entries: await allEntries(), weights: await allWeights() })], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `칼로리_백업_${ymd(new Date())}.json`;
@@ -491,10 +513,114 @@ $('importInput').onchange = async (ev) => {
   try {
     const data = JSON.parse(await file.text());
     for (const e of data.entries || []) await putEntry(e);
-    toast(`${(data.entries || []).length}개 기록을 불러왔어요`);
+    for (const w of data.weights || []) await putWeight(w);
+    toast(`음식 ${(data.entries || []).length}개 · 체중 ${(data.weights || []).length}개를 불러왔어요`);
     render();
   } catch { toast('백업 파일을 읽을 수 없어요'); }
 };
+
+// ---------- 체중계 (앳플리 T8, 블루투스) ----------
+// 2026-10-25 대표님 체중계(T8_SR405) 기록으로 해독: 서비스 0xffb0, 알림 0xffb2, 20바이트
+// ac 27 .. [b3 b4 b5] .. : 무게 = ((b3 & 0x1f) << 16 | b4 << 8 | b5) / 1000 kg, 0.25초마다 옴
+const SCALE_SERVICE = 0xffb0;
+const SCALE_NOTIFY = 0xffb2;
+const STABLE_COUNT = 6; // 같은 값이 6번(약 1.5초) 이어지면 측정 끝으로 봄
+function parseScale(dv) {
+  if (dv.byteLength < 6 || dv.getUint8(0) !== 0xac || dv.getUint8(1) !== 0x27) return null;
+  return (((dv.getUint8(3) & 0x1f) << 16) | (dv.getUint8(4) << 8) | dv.getUint8(5)) / 1000;
+}
+
+let scale = null; // { device, kg, done }
+function openWeight(kg = null) {
+  scale = { device: null, kg, done: kg != null };
+  $('scaleNum').textContent = kg != null ? kg.toFixed(2) : '–';
+  $('scaleMsg').textContent = kg != null ? '측정이 끝났어요. 저장해 주세요.' : '체중계를 한 번 밟아 켠 뒤 연결을 눌러 주세요.';
+  $('scaleConnect').classList.toggle('hidden', kg != null);
+  $('weightManual').value = kg != null ? kg.toFixed(2) : '';
+  $('weightSave').disabled = kg == null;
+  renderWeightList();
+  $('weightSheet').classList.remove('hidden');
+}
+function closeWeight() {
+  if (scale?.device?.gatt?.connected) scale.device.gatt.disconnect();
+  scale = null;
+  $('weightSheet').classList.add('hidden');
+}
+async function connectScale() {
+  if (!navigator.bluetooth) return toast('이 브라우저는 블루투스를 지원하지 않아요. 안드로이드 크롬에서 열어 주세요.', 3500);
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'T8' }, { services: [SCALE_SERVICE] }],
+      optionalServices: [SCALE_SERVICE],
+    });
+    scale.device = device;
+    $('scaleMsg').textContent = '연결하는 중…';
+    const server = await device.gatt.connect();
+    const ch = await (await server.getPrimaryService(SCALE_SERVICE)).getCharacteristic(SCALE_NOTIFY);
+    let last = null;
+    let same = 0;
+    ch.addEventListener('characteristicvaluechanged', (ev) => {
+      if (!scale || scale.done) return;
+      const kg = parseScale(ev.target.value);
+      if (kg == null) return;
+      $('scaleNum').textContent = kg ? kg.toFixed(2) : '0.00';
+      same = kg === last ? same + 1 : 0;
+      last = kg;
+      if (kg >= 10 && same >= STABLE_COUNT) {
+        scale.done = true;
+        scale.kg = kg;
+        $('scaleMsg').textContent = '✅ 측정 끝! 내려오셔도 돼요.';
+        $('weightManual').value = kg.toFixed(2);
+        $('weightSave').disabled = false;
+        if (navigator.vibrate) navigator.vibrate(150);
+        device.gatt.disconnect();
+      } else if (kg >= 10) {
+        $('scaleMsg').textContent = '측정 중… 가만히 서 계세요';
+      }
+    });
+    device.addEventListener('gattserverdisconnected', () => {
+      if (scale && !scale.done) $('scaleMsg').textContent = '연결이 끊겼어요. 다시 연결을 눌러 주세요.';
+    });
+    await ch.startNotifications();
+    $('scaleConnect').classList.add('hidden');
+    $('scaleMsg').textContent = '연결됐어요! 맨발로 체중계에 올라가세요.';
+  } catch (e) {
+    if (e.name !== 'NotFoundError') $('scaleMsg').textContent = `연결 실패: ${e.message}`;
+  }
+}
+async function renderWeightList() {
+  const list = (await allWeights()).sort((a, b) => b.at - a.at).slice(0, 10);
+  const box = $('weightList');
+  box.innerHTML = list.length ? '' : '<p class="small">아직 기록이 없어요.</p>';
+  for (const w of list) {
+    const d = new Date(w.at);
+    const row = document.createElement('div');
+    row.className = 'wrow';
+    row.innerHTML = `<span>${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}</span>
+      <b>${w.kg.toFixed(2)} kg</b><small>${w.source}</small><button class="del" aria-label="삭제">✕</button>`;
+    row.querySelector('.del').onclick = async () => {
+      if (!confirm('이 체중 기록을 지울까요?')) return;
+      await deleteWeight(w.id);
+      renderWeightList();
+      renderWeight();
+    };
+    box.appendChild(row);
+  }
+}
+$('weightCard').onclick = () => openWeight();
+$('scaleConnect').onclick = connectScale;
+$('weightManual').oninput = () => { $('weightSave').disabled = !(parseFloat($('weightManual').value) > 0); };
+$('weightSave').onclick = async () => {
+  const kg = parseFloat($('weightManual').value);
+  if (!(kg > 0)) return;
+  const at = Date.now();
+  const fromScale = scale?.kg != null && Math.abs(kg - scale.kg) < 0.001;
+  await putWeight({ id: crypto.randomUUID(), date: ymd(new Date(at)), at, kg, source: fromScale ? '체중계' : '직접' });
+  closeWeight();
+  toast(`${kg.toFixed(2)}kg 기록했어요`);
+  renderWeight();
+};
+$('weightClose').onclick = closeWeight;
 
 // ---------- 기타 ----------
 function toast(msg, ms = 2200) {
@@ -507,6 +633,7 @@ function toast(msg, ms = 2200) {
 for (const id of ['entrySheet', 'settingsSheet']) {
   $(id).addEventListener('click', (ev) => { if (ev.target.id === id) $(id).classList.add('hidden'); });
 }
+$('weightSheet').addEventListener('click', (ev) => { if (ev.target.id === 'weightSheet') closeWeight(); });
 $('prevDay').onclick = () => { current = shiftDay(-1); render(); };
 $('nextDay').onclick = () => { current = shiftDay(1); render(); };
 $('camBtn').onclick = () => $('camInput').click();

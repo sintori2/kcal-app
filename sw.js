@@ -1,5 +1,5 @@
 // 오프라인에서도 앱 화면이 열리도록 기본 파일을 캐시한다. (API 호출은 캐시하지 않음)
-const CACHE = 'kcal-v2';
+const CACHE = 'kcal-v3';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './data/foods.json', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

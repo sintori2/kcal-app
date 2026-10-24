@@ -95,6 +95,17 @@ header h1 { font-size: 20px; margin: 0; }
 .suggest button:first-child { border-top: 0; }
 .suggest button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest button b { flex: none; color: var(--sub); font-weight: 600; }
+.weight-card { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 2px 12px; width: 100%; text-align: left; }
+.weight-card .wlabel { font-weight: 700; color: var(--sub); }
+.weight-card .wnum { text-align: right; }
+.weight-card .wnum b { font-size: 26px; }
+.weight-card .small { grid-column: 1 / -1; }
+.scale-num { text-align: center; margin: 8px 0 0; color: var(--sub); }
+.scale-num b { font-size: 56px; color: var(--text); letter-spacing: -1px; }
+.wrow { display: grid; grid-template-columns: 1fr auto auto 28px; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.wrow:first-child { border-top: 0; }
+.wrow small { color: var(--sub); }
+.wrow .del { color: var(--warn); }
 .switch { display: flex; align-items: center; gap: 10px; }
 .switch input { width: 22px; height: 22px; accent-color: var(--accent); }
 .sum { display: flex; justify-content: space-between; font-weight: 800; font-size: 18px; margin: 10px 0; }
@@ -130,6 +141,12 @@ header h1 { font-size: 20px; margin: 0; }
   <div class="bar" id="bar"><div id="barFill" style="width:0"></div></div>
   <div class="remain" id="remain"></div>
 </section>
+
+<button class="card weight-card" id="weightCard">
+  <span class="wlabel">⚖️ 체중</span>
+  <span class="wnum"><b id="weightNum">–</b> kg</span>
+  <span class="small" id="weightMeta"></span>
+</button>
 
 <div class="actions">
   <button class="btn primary" id="camBtn">📷 사진 찍기</button>
@@ -174,6 +191,28 @@ header h1 { font-size: 20px; margin: 0; }
       <button class="btn" id="cancelEntry">취소</button>
       <button class="btn primary" id="analyzeBtn">분석하기</button>
       <button class="btn primary" id="saveEntry">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 체중 시트 -->
+<div class="sheet-bg hidden" id="weightSheet">
+  <div class="sheet">
+    <h2>체중 재기</h2>
+    <div class="scale-num"><b id="scaleNum">–</b> kg</div>
+    <p class="center" id="scaleMsg"></p>
+    <button class="btn primary" id="scaleConnect" style="width:100%">🔗 체중계 연결</button>
+    <div class="field">
+      <label>저장할 체중 (직접 입력도 돼요)</label>
+      <input id="weightManual" type="number" inputmode="decimal" step="0.05" min="10" placeholder="예: 70.5">
+    </div>
+    <div class="row-btns">
+      <button class="btn" id="weightClose">닫기</button>
+      <button class="btn primary" id="weightSave" disabled>저장</button>
+    </div>
+    <div class="field">
+      <label>최근 기록</label>
+      <div id="weightList"></div>
     </div>
   </div>
 </div>
