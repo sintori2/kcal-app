@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>체중계 연결 시험</title>
+<meta name="theme-color" content="#FF8A5B">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+:root { --bg: #FFF8F3; --card: #FFFFFF; --text: #2A211C; --sub: #8A7A70; --line: #F0E4DB; --accent: #FF8A5B; --warn: #E5533D; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #1B1715; --card: #26201D; --text: #F4ECE6; --sub: #A8968A; --line: #3A312C; --accent: #FF9B70; --warn: #FF7A66; }
+}
+:root[data-theme="dark"] { --bg: #1B1715; --card: #26201D; --text: #F4ECE6; --sub: #A8968A; --line: #3A312C; --accent: #FF9B70; --warn: #FF7A66; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font-family: system-ui, -apple-system, "Noto Sans KR", sans-serif; padding: env(safe-area-inset-top) 16px 24px; max-width: 560px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 16px 0 4px; }
+a { color: var(--accent); }
+.card { background: var(--card); border-radius: 18px; padding: 16px; margin: 12px 0; }
+ol { margin: 0; padding-left: 20px; line-height: 1.7; }
+.btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+button { font: inherit; color: inherit; border: 1px solid var(--line); background: var(--card); border-radius: 14px; padding: 14px 10px; font-weight: 700; cursor: pointer; }
+button.primary { background: var(--accent); color: #fff; border: 0; grid-column: 1 / -1; }
+button[disabled] { opacity: .5; }
+#status { font-weight: 700; margin: 12px 0 6px; }
+#log { background: #111; color: #9fe8a8; font: 12px/1.5 ui-monospace, Consolas, monospace; border-radius: 12px; padding: 12px;
+  height: 46vh; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+.small { font-size: 13px; color: var(--sub); }
+</style>
+</head>
+<body>
+<p class="small"><a href="./">← 칼로리 앱으로</a></p>
+<h1>⚖️ 체중계 연결 시험</h1>
+<p class="small">앳플리 체중계가 보내는 신호를 기록해서, 우리 앱이 직접 읽을 수 있는지 알아보는 화면이에요.</p>
+
+<section class="card">
+  <ol>
+    <li>폰의 <b>블루투스</b>와 <b>위치</b>를 켜고, 앳플리 앱은 <b>완전히 종료</b>해 주세요.</li>
+    <li>체중계를 한 번 밟아 화면을 켠 뒤 내려옵니다.</li>
+    <li><b>체중계 찾기</b> → 목록에서 체중계를 고르세요. (이름이 없으면 맨 위 기기부터 하나씩)</li>
+    <li>"연결됨"이 뜨면 <b>맨발로</b> 올라가서 측정이 끝날 때까지 서 있다가 내려옵니다.</li>
+    <li><b>기록 보내기</b>를 눌러 Claude에게 붙여넣어 주세요.</li>
+  </ol>
+</section>
+
+<div class="btns">
+  <button class="primary" id="scanBtn">🔍 체중계 찾기</button>
+  <button id="copyBtn">📋 기록 복사</button>
+  <button id="shareBtn">📤 기록 보내기</button>
+</div>
+<p id="status">대기 중</p>
+<div id="log"></div>
+
+<script>
+// 체중계마다 쓰는 블루투스 서비스가 달라서, 흔히 쓰이는 표준·제조사 서비스를 모두 열어 둔다.
+const SERVICES = [
+  0x1800, 0x1801, 0x180a, 0x180f, 0x181b, 0x181c, 0x181d, 0x1805,
+  0xffb0, 0xffc0, 0xffd0, 0xffe0, 0xffe5, 0xfff0, 0xfff5, 0xffa0, 0xff00, 0xff10, 0xfee7, 0xfeb3, 0x1910, 0xfa9b, 0xffcc,
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART
+  '0000fe95-0000-1000-8000-00805f9b34fb',
+];
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const lines = [];
+const t0 = performance.now();
+const hex = (dv) => [...new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength)].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+const short = (uuid) => (/^0000[0-9a-f]{4}-0000-1000-8000-00805f9b34fb$/.test(uuid) ? `0x${uuid.slice(4, 8)}` : uuid);
+function log(msg) {
+  const line = `[${((performance.now() - t0) / 1000).toFixed(2).padStart(7)}] ${msg}`;
+  lines.push(line);
+  logEl.textContent += line + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+const setStatus = (s) => { statusEl.textContent = s; };
+
+log(`브라우저: ${navigator.userAgent}`);
+if (!navigator.bluetooth) {
+  setStatus('이 브라우저는 블루투스를 지원하지 않아요. 안드로이드 크롬에서 열어 주세요.');
+  document.getElementById('scanBtn').disabled = true;
+}
+
+document.getElementById('scanBtn').onclick = async () => {
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: SERVICES });
+  } catch (e) { setStatus('기기를 고르지 않았어요'); log(`선택 취소/오류: ${e.message}`); return; }
+  log(`기기: name="${device.name || ''}" id=${device.id}`);
+
+  // 연결 없이 광고 신호로만 무게를 보내는 체중계도 있어서, 가능하면 광고도 함께 듣는다.
+  if (device.watchAdvertisements) {
+    device.addEventListener('advertisementreceived', (ev) => {
+      const parts = [`광고 rssi=${ev.rssi}`];
+      ev.manufacturerData.forEach((dv, id) => parts.push(`mfr[0x${id.toString(16).padStart(4, '0')}]=${hex(dv)}`));
+      ev.serviceData.forEach((dv, uuid) => parts.push(`svc[${short(uuid)}]=${hex(dv)}`));
+      log(parts.join(' | '));
+    });
+    device.watchAdvertisements().then(() => log('광고 신호 듣는 중')).catch((e) => log(`광고 듣기 불가: ${e.message}`));
+  } else {
+    log('이 크롬은 광고 신호 듣기를 지원하지 않음 (연결 방식만 시험)');
+  }
+
+  device.addEventListener('gattserverdisconnected', () => { log('연결 끊김'); setStatus('연결 끊김 — 다시 찾기를 눌러도 돼요'); });
+  try {
+    setStatus('연결하는 중…');
+    const server = await device.gatt.connect();
+    log('GATT 연결됨');
+    const services = await server.getPrimaryServices();
+    log(`서비스 ${services.length}개`);
+    for (const s of services) {
+      log(`서비스 ${short(s.uuid)}`);
+      let chars = [];
+      try { chars = await s.getCharacteristics(); } catch (e) { log(`  특성 읽기 실패: ${e.message}`); }
+      for (const c of chars) {
+        const p = c.properties;
+        const props = ['read', 'write', 'writeWithoutResponse', 'notify', 'indicate'].filter((k) => p[k]).join(',');
+        log(`  특성 ${short(c.uuid)} [${props}]`);
+        if (p.read) {
+          try { const v = await c.readValue(); log(`    읽기 = ${hex(v)}  "${new TextDecoder().decode(v).replace(/[^\x20-\x7e가-힣]/g, '.')}"`); }
+          catch (e) { log(`    읽기 실패: ${e.message}`); }
+        }
+        if (p.notify || p.indicate) {
+          try {
+            c.addEventListener('characteristicvaluechanged', (ev) => log(`알림 ${short(c.uuid)} = ${hex(ev.target.value)}`));
+            await c.startNotifications();
+            log('    알림 켬');
+          } catch (e) { log(`    알림 실패: ${e.message}`); }
+        }
+      }
+    }
+    setStatus('✅ 연결됨 — 이제 체중계에 올라가 측정해 주세요');
+  } catch (e) {
+    log(`연결 실패: ${e.message}`);
+    setStatus('연결 실패 — 광고 신호만 들어볼게요. 체중계에 올라가 보세요');
+  }
+};
+
+document.getElementById('copyBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(lines.join('\n')); setStatus('기록을 복사했어요'); }
+  catch { setStatus('복사가 안 돼요. 기록 보내기를 써 주세요'); }
+};
+document.getElementById('shareBtn').onclick = async () => {
+  const text = lines.join('\n');
+  if (navigator.share) {
+    try { await navigator.share({ title: '체중계 연결 기록', text }); } catch {}
+  } else {
+    document.getElementById('copyBtn').click();
+  }
+};
+</script>
+</body>
+</html>
