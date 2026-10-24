@@ -80,9 +80,23 @@ header h1 { font-size: 20px; margin: 0; }
 .preview { width: 100%; max-height: 260px; object-fit: cover; border-radius: 14px; background: var(--accent-soft); }
 .field { margin: 12px 0; }
 .field label { display: block; font-size: 13px; color: var(--sub); margin-bottom: 6px; }
-.items .row { display: grid; grid-template-columns: 1fr 88px 72px 32px; gap: 6px; margin-bottom: 6px; }
+.items .item { margin-bottom: 10px; position: relative; }
+.items .row { display: grid; grid-template-columns: 1.2fr 1fr 64px 28px; gap: 6px; }
 .items .row input { padding: 8px; }
 .items .del { color: var(--warn); font-size: 18px; }
+.items .src { font-size: 12px; color: var(--sub); margin: 4px 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag { display: inline-block; padding: 1px 7px; border-radius: 99px; font-weight: 700; font-size: 11px; background: var(--line); color: var(--text); }
+.tag.t-식약처 { background: #DCEFDD; color: #24692A; }
+.tag.t-웹검색 { background: #DCE8F7; color: #1F4F8A; }
+.tag.t-AI추정 { background: #FBE9CF; color: #8A5A12; }
+.suggest { position: absolute; left: 0; right: 0; top: 42px; z-index: 5; background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.15); overflow: hidden; }
+.suggest button { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 10px 12px; text-align: left; border-top: 1px solid var(--line); font-size: 14px; }
+.suggest button:first-child { border-top: 0; }
+.suggest button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest button b { flex: none; color: var(--sub); font-weight: 600; }
+.switch { display: flex; align-items: center; gap: 10px; }
+.switch input { width: 22px; height: 22px; accent-color: var(--accent); }
 .sum { display: flex; justify-content: space-between; font-weight: 800; font-size: 18px; margin: 10px 0; }
 .note { background: var(--accent-soft); border-radius: 12px; padding: 10px 12px; font-size: 14px; margin-top: 10px; }
 .row-btns { display: flex; gap: 8px; margin-top: 14px; }
@@ -141,7 +155,7 @@ header h1 { font-size: 20px; margin: 0; }
       <label>사진에 덧붙일 말 (선택)</label>
       <input id="hintInput" placeholder="예: 밥은 반 공기만 먹었어요">
     </div>
-    <div id="analyzing" class="hidden"><div class="spinner"></div><p class="center">사진을 분석하고 있어요…</p></div>
+    <div id="analyzing" class="hidden"><div class="spinner"></div><p class="center" id="analyzeMsg">사진을 보고 있어요…</p></div>
     <div id="entryForm">
       <div class="field">
         <label>끼니</label>
@@ -184,6 +198,10 @@ header h1 { font-size: 20px; margin: 0; }
         <option value="claude-sonnet-5-5">Claude Sonnet 5.5 — 중간</option>
         <option value="claude-haiku-5-5">Claude Haiku 5.5 — 가장 저렴</option>
       </select>
+    </div>
+    <div class="field">
+      <label class="switch"><input type="checkbox" id="webInput"> 식약처 데이터에 없는 음식은 인터넷 검색</label>
+      <p class="small">켜면 없는 음식만 검색해요. 검색할 때마다 요금이 조금 더 나가요.</p>
     </div>
     <div class="field">
       <label>백업</label>
