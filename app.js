@@ -84,8 +84,9 @@ function dateLabel(d) {
   return s === today ? `오늘 · ${base}` : s === yest ? `어제 · ${base}` : base;
 }
 function guessMeal(d = new Date()) {
-  const h = d.getHours();
-  return h >= 5 && h < 10 ? '아침' : h >= 11 && h < 15 ? '점심' : h >= 17 && h < 21 ? '저녁' : '간식';
+  // 아침 04:00~10:29 · 점심 10:30~15:29 · 저녁 16:30~21:29 · 나머지(오후 간식·야식)는 간식
+  const t = d.getHours() * 60 + d.getMinutes();
+  return t >= 240 && t < 630 ? '아침' : t >= 630 && t < 930 ? '점심' : t >= 990 && t < 1290 ? '저녁' : '간식';
 }
 
 // ---------- 메인 화면 ----------
@@ -240,6 +241,47 @@ async function heicToJpeg(file) {
   });
   const out = await (await heicLib)({ blob: file, toType: 'image/jpeg', quality: 0.85 });
   return Array.isArray(out) ? out[0] : out;
+}
+// 사진 찍은 시각: JPEG의 EXIF DateTimeOriginal → 없으면 파일 수정 시각(갤러리 사진은 보통 찍은 시각)
+async function photoTakenAt(file) {
+  try {
+    const buf = new DataView(await file.slice(0, 256 * 1024).arrayBuffer());
+    if (buf.getUint16(0) === 0xffd8) {
+      let off = 2;
+      while (off + 4 < buf.byteLength) {
+        const marker = buf.getUint16(off);
+        const len = buf.getUint16(off + 2);
+        if (marker === 0xffe1 && buf.getUint32(off + 4) === 0x45786966) { // "Exif"
+          const tiff = off + 10;
+          const le = buf.getUint16(tiff) === 0x4949;
+          const u16 = (o) => buf.getUint16(tiff + o, le);
+          const u32 = (o) => buf.getUint32(tiff + o, le);
+          const readStr = (o, n) => String.fromCharCode(...new Uint8Array(buf.buffer, tiff + o, n)).replace(/\0.*$/, '');
+          const findTag = (ifd, tag) => {
+            const n = u16(ifd);
+            for (let i = 0; i < n; i++) {
+              const e = ifd + 2 + i * 12;
+              if (u16(e) === tag) return e;
+            }
+            return null;
+          };
+          const ifd0 = u32(4);
+          let e = null;
+          const exifPtr = findTag(ifd0, 0x8769);
+          if (exifPtr) e = findTag(u32(exifPtr + 8), 0x9003); // DateTimeOriginal
+          if (!e) e = findTag(ifd0, 0x0132); // DateTime
+          if (e) {
+            const m = readStr(u32(e + 8), 19).match(/(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+            if (m) return new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+          }
+          break;
+        }
+        if ((marker & 0xff00) !== 0xff00) break;
+        off += 2 + len;
+      }
+    }
+  } catch { /* EXIF가 없거나 깨진 사진 */ }
+  return file.lastModified ? new Date(file.lastModified) : null;
 }
 const looksHeic = (file) => /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
 async function loadImage(file) {
@@ -658,7 +700,7 @@ async function runLocalAI() {
 // ---------- 기록 시트 ----------
 let draft = null; // { id?, date, meal, items[], thumb, photo, createdAt, existing }
 
-function openEntry({ entry, photo, thumb, items, title, barcode } = {}) {
+function openEntry({ entry, photo, thumb, items, title, barcode, takenAt } = {}) {
   draft = entry
     ? { ...entry, people: entry.people || 1, items: entry.items.map((i) => unshareItem(i, entry.people || 1)), existing: true }
     : { date: ymd(current), meal: guessMeal(), people: 1, items: items || [], thumb: thumb || null, photo: photo || null, createdAt: Date.now(), existing: false, barcode };
@@ -666,6 +708,14 @@ function openEntry({ entry, photo, thumb, items, title, barcode } = {}) {
     // 지난 날짜에 추가할 때는 그날 정오 기준 시간으로 저장
     const d = new Date(current); d.setHours(12, 0, 0, 0); draft.createdAt = d.getTime();
   }
+  // 사진을 찍은 시각이 있으면 그 날짜·끼니로 (앨범에서 예전 사진을 골라도 맞는 날에 들어감)
+  if (!entry && takenAt && !Number.isNaN(takenAt.getTime()) && takenAt <= new Date()) {
+    draft.date = ymd(takenAt);
+    draft.createdAt = takenAt.getTime();
+    draft.meal = guessMeal(takenAt);
+    draft.takenNote = `📅 사진 찍은 시각 ${takenAt.getMonth() + 1}/${takenAt.getDate()} ${pad(takenAt.getHours())}:${pad(takenAt.getMinutes())} → ${draft.meal}`;
+  }
+  $('takenInfo').textContent = draft.takenNote || '';
   $('entryTitle').textContent = title || (entry ? '기록 수정' : photo ? '사진 분석' : '직접 입력');
   $('entryImg').classList.toggle('hidden', !(photo || draft.thumb));
   if (photo || draft.thumb) $('entryImg').src = photo || draft.thumb;
@@ -831,8 +881,8 @@ function closeEntry() { $('entrySheet').classList.add('hidden'); draft = null; }
 async function onPhoto(file) {
   if (!file) return;
   try {
-    const img = await loadImage(file);
-    openEntry({ photo: resized(img, 1024, 0.82), thumb: resized(img, 160, 0.7, true) });
+    const [img, taken] = await Promise.all([loadImage(file), photoTakenAt(file)]);
+    openEntry({ photo: resized(img, 1024, 0.82), thumb: resized(img, 160, 0.7, true), takenAt: taken });
   } catch (e) { toast(`${e.message} (${file.type || '형식 모름'}, ${(file.size / 1e6).toFixed(1)}MB)`, 5000); }
 }
 
@@ -880,6 +930,7 @@ $('saveEntry').onclick = async () => {
   if (draft.barcode) entry.barcode = draft.barcode;
   await putEntry(entry);
   closeEntry();
+  if (entry.date !== ymd(current)) current = new Date(entry.createdAt); // 사진 찍은 날로 화면 이동
   toast(`${entry.kcal.toLocaleString()} kcal 기록했어요`);
   render();
 };
