@@ -475,35 +475,74 @@ async function loadFoodModel() {
   }
   return foodModel;
 }
-async function classifyFood(dataUrl) {
-  const { ort, session, classes } = await loadFoodModel();
-  const img = await new Promise((resolve, reject) => {
-    const im = new Image();
-    im.onload = () => resolve(im);
-    im.onerror = () => reject(new Error('사진을 열 수 없어요'));
-    im.src = dataUrl;
-  });
-  // 학습 때와 같게: 짧은 변 224로 줄이고 가운데 224×224, ImageNet 평균·표준편차로 정규화
+// 사진의 (sx,sy,sw,sh) 부분을 224×224로 넣어 음식별 확률을 구함 (학습 때와 같은 정규화)
+async function predict(model, src, sx, sy, sw, sh) {
   const S = 224;
-  const k = S / Math.min(img.width, img.height);
-  const w = Math.round(img.width * k);
-  const h = Math.round(img.height * k);
   const c = document.createElement('canvas');
   c.width = c.height = S;
-  c.getContext('2d').drawImage(img, -(w - S) / 2, -(h - S) / 2, w, h);
-  const px = c.getContext('2d').getImageData(0, 0, S, S).data;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(src, sx, sy, sw, sh, 0, 0, S, S);
+  const px = g.getImageData(0, 0, S, S).data;
   const mean = [0.485, 0.456, 0.406];
   const std = [0.229, 0.224, 0.225];
   const input = new Float32Array(3 * S * S);
   for (let i = 0; i < S * S; i++) {
     for (let ch = 0; ch < 3; ch++) input[ch * S * S + i] = (px[i * 4 + ch] / 255 - mean[ch]) / std[ch];
   }
-  const out = await session.run({ image: new ort.Tensor('float32', input, [1, 3, S, S]) });
+  const out = await model.session.run({ image: new model.ort.Tensor('float32', input, [1, 3, S, S]) });
   const logits = out.logits.data;
   const max = Math.max(...logits);
   const exps = Array.from(logits, (v) => Math.exp(v - max));
   const sum = exps.reduce((a, b) => a + b, 0);
-  return exps.map((v, i) => ({ name: classes[i], p: v / sum })).sort((a, b) => b.p - a.p).slice(0, 4);
+  return exps.map((v, i) => ({ name: model.classes[i], p: v / sum }));
+}
+// 캡처 화면처럼 위아래·양옆이 검은 사진은 검은 부분을 잘라 냄
+function trimDark(img) {
+  const W = 120;
+  const H = Math.round((img.height / img.width) * W);
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H).data;
+  const lum = (x, y) => { const i = (y * W + x) * 4; return (d[i] + d[i + 1] + d[i + 2]) / 3; };
+  const rowDark = (y) => { let s = 0; for (let x = 0; x < W; x++) s += lum(x, y); return s / W < 14; };
+  const colDark = (x, y0, y1) => { let s = 0; for (let y = y0; y < y1; y++) s += lum(x, y); return s / (y1 - y0) < 14; };
+  let t = 0; let b = H - 1;
+  while (t < b && rowDark(t)) t++;
+  while (b > t && rowDark(b)) b--;
+  let l = 0; let r = W - 1;
+  while (l < r && colDark(l, t, b + 1)) l++;
+  while (r > l && colDark(r, t, b + 1)) r--;
+  const k = img.width / W;
+  const box = { x: l * k, y: t * k, w: (r - l + 1) * k, h: (b - t + 1) * k };
+  return box.w * box.h < img.width * img.height * 0.9 ? box : { x: 0, y: 0, w: img.width, h: img.height };
+}
+// 사진 전체로 한 번 + 겹치는 칸들(짧은 변의 30·45·60%)로 훑어서, 칸마다 확신 높은 음식을 모음
+async function scanFood(dataUrl, onProgress = () => {}) {
+  const model = await loadFoodModel();
+  const img = await decodeImage(await (await fetch(dataUrl)).blob());
+  const area = trimDark(img);
+  const short = Math.min(area.w, area.h);
+  const whole = (await predict(model, img, area.x + (area.w - short) / 2, area.y + (area.h - short) / 2, short, short))
+    .sort((a, b) => b.p - a.p).slice(0, 4);
+  const wins = [];
+  for (const frac of [0.3, 0.45, 0.6]) {
+    const s = short * frac;
+    const step = s / 2;
+    for (let y = 0; y + s <= area.h + 1; y += step) {
+      for (let x = 0; x + s <= area.w + 1; x += step) wins.push([area.x + x, area.y + y, s]);
+    }
+  }
+  const found = new Map();
+  for (let i = 0; i < wins.length; i++) {
+    const [x, y, s] = wins[i];
+    const best = (await predict(model, img, x, y, s, s)).reduce((a, b) => (b.p > a.p ? b : a));
+    if (best.p >= 0.5 && !(found.get(best.name)?.p >= best.p)) found.set(best.name, best);
+    if (i % 8 === 0) onProgress(Math.round((i / wins.length) * 100));
+  }
+  const dishes = [...found.values()].sort((a, b) => b.p - a.p).slice(0, 8);
+  return { whole, dishes };
 }
 // AI Hub 음식 이름이 식약처 데이터와 다르게 적힌 것들
 const FOOD_ALIAS = {
@@ -555,25 +594,51 @@ async function runLocalAI() {
   $('analyzing').classList.remove('hidden');
   $('analyzeMsg').textContent = '내 AI가 보고 있어요…';
   try {
-    const top = await classifyFood(d.photo);
+    const { whole, dishes } = await scanFood(d.photo, (pct) => { $('analyzeMsg').textContent = `내 AI가 음식을 찾는 중… ${pct}%`; });
     if (draft !== d) return;
-    d.items = [await itemForFood(top[0].name, top[0].p)];
-    d.note = top[0].p < 0.5 ? '내 AI가 확신이 낮아요. 아래 후보를 고르거나 Claude로 자세히 분석해 보세요.' : '';
-    $('aiNote').textContent = d.note;
-    $('aiNote').classList.toggle('hidden', !d.note);
     const box = $('aiCandidates');
     box.innerHTML = '';
-    for (const c of top) {
-      const b = document.createElement('button');
-      b.textContent = `${c.name} ${Math.round(c.p * 100)}%`;
-      b.className = c === top[0] ? 'on' : '';
-      b.onclick = async () => {
-        d.items[0] = await itemForFood(c.name, c.p);
-        for (const x of box.children) x.classList.toggle('on', x === b);
-        renderDraft();
-      };
-      box.appendChild(b);
+    // 사진 전체로 봐서 한 음식이라고 확신하면(60%↑) 한 음식, 아니면 여러 음식으로 봄
+    if (dishes.length >= 2 && whole[0].p < 0.6) {
+      // 여러 음식: 찾은 음식을 모두 넣고, 칩을 눌러 빼거나 다시 넣음
+      const chosen = new Map();
+      for (const c of dishes) {
+        if (c.p >= 0.6) chosen.set(c.name, await itemForFood(c.name, c.p));
+      }
+      if (!chosen.size) chosen.set(dishes[0].name, await itemForFood(dishes[0].name, dishes[0].p));
+      const sync = () => { d.items = [...chosen.values()]; renderDraft(); };
+      for (const c of dishes) {
+        const b = document.createElement('button');
+        b.textContent = `${c.name.replace(/_/g, '·')} ${Math.round(c.p * 100)}%`;
+        b.classList.toggle('on', chosen.has(c.name));
+        b.onclick = async () => {
+          if (chosen.has(c.name)) chosen.delete(c.name);
+          else chosen.set(c.name, await itemForFood(c.name, c.p));
+          b.classList.toggle('on', chosen.has(c.name));
+          sync();
+        };
+        box.appendChild(b);
+      }
+      d.note = `사진에서 음식 ${dishes.length}개를 찾았어요. 위 버튼을 눌러 틀린 건 빼고 빠진 건 넣어 주세요. 못 찾은 음식은 '+ 음식 추가'로 넣으면 돼요.`;
+      sync();
+    } else {
+      const top = whole;
+      d.items = [await itemForFood(top[0].name, top[0].p)];
+      d.note = top[0].p < 0.5 ? '내 AI가 확신이 낮아요. 아래 후보를 고르거나 Claude로 자세히 분석해 보세요.' : '';
+      for (const c of top) {
+        const b = document.createElement('button');
+        b.textContent = `${c.name.replace(/_/g, '·')} ${Math.round(c.p * 100)}%`;
+        b.className = c === top[0] ? 'on' : '';
+        b.onclick = async () => {
+          d.items[0] = await itemForFood(c.name, c.p);
+          for (const x of box.children) x.classList.toggle('on', x === b);
+          renderDraft();
+        };
+        box.appendChild(b);
+      }
     }
+    $('aiNote').textContent = d.note;
+    $('aiNote').classList.toggle('hidden', !d.note);
     box.classList.remove('hidden');
     $('entryForm').classList.remove('hidden');
     $('saveEntry').classList.remove('hidden');
