@@ -117,6 +117,9 @@ header h1 { font-size: 20px; margin: 0; }
 .tag.t-식약처 { background: #DCEFDD; color: #24692A; }
 .tag.t-웹검색 { background: #DCE8F7; color: #1F4F8A; }
 .tag.t-AI추정 { background: #FBE9CF; color: #8A5A12; }
+.cands { grid-template-columns: repeat(2, 1fr); margin-top: 12px; }
+.cands button { font-size: 13px; padding: 9px 4px; }
+.tag.t-내AI { background: #FFE0D2; color: #9A3B12; }
 .tag.t-바코드, .tag.t-영양표 { background: #E9E1F7; color: #55358F; }
 .note:empty { display: none; }
 .suggest { position: absolute; left: 0; right: 0; top: 42px; z-index: 5; background: var(--card); border: 1px solid var(--line);
@@ -232,6 +235,7 @@ header h1 { font-size: 20px; margin: 0; }
       <label>사진에 덧붙일 말 (선택)</label>
       <input id="hintInput" placeholder="예: 밥은 반 공기만 먹었어요">
     </div>
+    <div class="seg cands hidden" id="aiCandidates"></div>
     <div id="analyzing" class="hidden"><div class="spinner"></div><p class="center" id="analyzeMsg">사진을 보고 있어요…</p></div>
     <div id="entryForm">
       <div class="field">
@@ -334,6 +338,10 @@ header h1 { font-size: 20px; margin: 0; }
         <option value="claude-sonnet-5-5">Claude Sonnet 5.5 — 중간</option>
         <option value="claude-haiku-5-5">Claude Haiku 5.5 — 가장 저렴</option>
       </select>
+    </div>
+    <div class="field">
+      <label class="switch"><input type="checkbox" id="localAIInput"> 사진은 내 AI로 먼저 인식 (무료·인터넷 없이)</label>
+      <p class="small">한국 음식 150종을 배운 AI가 폰 안에서 인식해요. 어려운 사진만 Claude로 자세히 분석하세요.</p>
     </div>
     <div class="field">
       <label class="switch"><input type="checkbox" id="webInput"> 식약처 데이터에 없는 음식은 인터넷 검색</label>

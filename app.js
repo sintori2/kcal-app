@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 // ---------- 설정 (localStorage) ----------
 const settings = Object.assign(
   {
-    goal: 2000, apiKey: '', model: 'claude-opus-5-5', webSearch: true,
+    goal: 2000, apiKey: '', model: 'claude-opus-5-5', webSearch: true, localAI: true,
     // 목표 자동 계산용 프로필
     autoGoal: false, sex: 'male', birthYear: 2001, height: 175, activity: 1.375, pace: -0.5,
   },
@@ -432,6 +432,136 @@ async function analyzePhoto(dataUrl, hint, onStep = () => {}) {
   throw new Error('분석 결과를 받지 못했어요. 다시 시도해 주세요.');
 }
 
+// ---------- 내 AI (폰 안에서 도는 음식 인식 모델, 무료·오프라인) ----------
+// model/food.onnx: AI Hub 한국 이미지(음식) 150종으로 학습한 MobileNetV3 (_train/train.py)
+const ORT_URL = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+let foodModel = null;
+async function loadFoodModel() {
+  if (!foodModel) {
+    foodModel = (async () => {
+      const ort = await import(`${ORT_URL}ort.min.mjs`);
+      ort.env.wasm.wasmPaths = ORT_URL;
+      const [session, classes] = await Promise.all([
+        ort.InferenceSession.create('model/food.onnx', { executionProviders: ['wasm'] }),
+        fetch('model/classes.json').then((r) => r.json()),
+      ]);
+      return { ort, session, classes };
+    })();
+    foodModel.catch(() => { foodModel = null; });
+  }
+  return foodModel;
+}
+async function classifyFood(dataUrl) {
+  const { ort, session, classes } = await loadFoodModel();
+  const img = await new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error('사진을 열 수 없어요'));
+    im.src = dataUrl;
+  });
+  // 학습 때와 같게: 짧은 변 224로 줄이고 가운데 224×224, ImageNet 평균·표준편차로 정규화
+  const S = 224;
+  const k = S / Math.min(img.width, img.height);
+  const w = Math.round(img.width * k);
+  const h = Math.round(img.height * k);
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  c.getContext('2d').drawImage(img, -(w - S) / 2, -(h - S) / 2, w, h);
+  const px = c.getContext('2d').getImageData(0, 0, S, S).data;
+  const mean = [0.485, 0.456, 0.406];
+  const std = [0.229, 0.224, 0.225];
+  const input = new Float32Array(3 * S * S);
+  for (let i = 0; i < S * S; i++) {
+    for (let ch = 0; ch < 3; ch++) input[ch * S * S + i] = (px[i * 4 + ch] / 255 - mean[ch]) / std[ch];
+  }
+  const out = await session.run({ image: new ort.Tensor('float32', input, [1, 3, S, S]) });
+  const logits = out.logits.data;
+  const max = Math.max(...logits);
+  const exps = Array.from(logits, (v) => Math.exp(v - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map((v, i) => ({ name: classes[i], p: v / sum })).sort((a, b) => b.p - a.p).slice(0, 4);
+}
+// AI Hub 음식 이름이 식약처 데이터와 다르게 적힌 것들
+const FOOD_ALIAS = {
+  간장게장: '게장 간장', 양념게장: '게장 양념', 감자채볶음: '감자볶음 감자만', 계란국: '달걀국', 계란말이: '달걀말이',
+  계란찜: '달걀찜', 고추장진미채볶음: '오징어채볶음', 곰탕_설렁탕: '설렁탕', 닭계장: '육개장', 도라지무침: '도라지생채',
+  떡국_만두국: '떡국', 북엇국: '북어국', 소세지볶음: '소시지볶음', 시래기국: '시래기 된장국', 젓갈: '오징어젓 양념',
+  한과: '약과', 삼겹살: '삼겹살구이',
+  만두: '만두 고기만두', 새우볶음밥: '볶음밥 새우',
+};
+// 식약처 데이터에 없는 음식: 일반적인 참고값 (100g당 kcal, 1인분 g)
+const FOOD_EXTRA = {
+  계란후라이: [196, 50], 떡꼬치: [230, 100], 산낙지: [70, 150], 과메기: [220, 100], 열무국수: [80, 550], 꽈리고추무침: [60, 70],
+  멍게: [70, 100], 양념치킨: [290, 250], 후라이드치킨: [270, 250], 수정과: [60, 200],
+  // 식약처엔 급식 소량(80ml)만 있거나 여럿이 나눠 먹는 양(1.5kg)이라 1인분 참고값으로
+  보쌈: [290, 200], 수육: [290, 200], 편육: [250, 150], 찜닭: [150, 450],
+};
+// 같은 음식이라도 식약처 데이터엔 100g 기준값·급식·세트상품이 섞여 있어서,
+// 이름이 가장 가깝고 실제 1인분 양(100g 초과)이 적힌 일반 음식들 중 가운데 값을 고름
+function pickServing(db, query) {
+  const q = norm(query);
+  const cands = db.filter((f) => !f.brand && f.key.includes(q));
+  // 이름이 똑같은 것 → 이름으로 시작하는 것(김치찌개 꽁치 등) → 이름을 포함하는 것 순으로 고름
+  const pool = [(f) => f.key === q, (f) => f.key.startsWith(q), () => true]
+    .map((test) => cands.filter(test)).find((list) => list.length);
+  if (!pool) return null;
+  const real = pool.filter((f) => f.serving > 100 && f.serving <= 900 && f.origin !== '급식');
+  const use = (real.length ? real : pool).slice().sort((a, b) => servingKcal(a) - servingKcal(b));
+  return use[Math.floor((use.length - 1) / 2)];
+}
+// 인식한 음식 이름 → 식약처 데이터에서 1인분 칼로리
+async function itemForFood(name, p) {
+  const db = await loadFoodDB();
+  const label = name.replace(/_/g, '·');
+  const ref = `내 AI ${Math.round(p * 100)}%`;
+  if (FOOD_EXTRA[name]) {
+    const [per100, g] = FOOD_EXTRA[name];
+    const it = { name: label, amount: `${g}g`, source: '내AI', ref: `${ref} · 일반 참고값`, per100, m100: null };
+    scaleItem(it, g);
+    return it;
+  }
+  const f = pickServing(db, FOOD_ALIAS[name] || name);
+  if (!f) return { name: label, amount: '1인분', kcal: 0, source: '내AI', ref: `${ref} · 칼로리 데이터 없음` };
+  const it = { name: f.name, amount: `${f.serving || 100}${f.unit}`, source: '내AI', ref: `${ref} · ${refName(f)}`, per100: f.per100, m100: f.m100 };
+  scaleItem(it, f.serving || 100);
+  return it;
+}
+async function runLocalAI() {
+  const d = draft;
+  $('analyzing').classList.remove('hidden');
+  $('analyzeMsg').textContent = '내 AI가 보고 있어요…';
+  try {
+    const top = await classifyFood(d.photo);
+    if (draft !== d) return;
+    d.items = [await itemForFood(top[0].name, top[0].p)];
+    d.note = top[0].p < 0.5 ? '내 AI가 확신이 낮아요. 아래 후보를 고르거나 Claude로 자세히 분석해 보세요.' : '';
+    $('aiNote').textContent = d.note;
+    $('aiNote').classList.toggle('hidden', !d.note);
+    const box = $('aiCandidates');
+    box.innerHTML = '';
+    for (const c of top) {
+      const b = document.createElement('button');
+      b.textContent = `${c.name} ${Math.round(c.p * 100)}%`;
+      b.className = c === top[0] ? 'on' : '';
+      b.onclick = async () => {
+        d.items[0] = await itemForFood(c.name, c.p);
+        for (const x of box.children) x.classList.toggle('on', x === b);
+        renderDraft();
+      };
+      box.appendChild(b);
+    }
+    box.classList.remove('hidden');
+    $('entryForm').classList.remove('hidden');
+    $('saveEntry').classList.remove('hidden');
+    $('analyzeBtn').textContent = '🤖 Claude로 자세히';
+    renderDraft();
+  } catch (e) {
+    toast(`내 AI를 쓸 수 없어요: ${e.message}`, 3500);
+  } finally {
+    $('analyzing').classList.add('hidden');
+  }
+}
+
 // ---------- 기록 시트 ----------
 let draft = null; // { id?, date, meal, items[], thumb, photo, createdAt, existing }
 
@@ -456,9 +586,12 @@ function openEntry({ entry, photo, thumb, items, title, barcode } = {}) {
   $('aiNote').classList.toggle('hidden', !draft.note);
   $('aiNote').textContent = draft.note || '';
   $('analyzing').classList.add('hidden');
+  $('aiCandidates').classList.add('hidden');
+  $('analyzeBtn').textContent = '분석하기';
   if (!entry && !photo && !draft.items.length) draft.items.push({ name: '', amount: '', kcal: 0 });
   renderDraft();
   $('entrySheet').classList.remove('hidden');
+  if (photo && settings.localAI) runLocalAI();
 }
 
 function renderDraft() {
@@ -556,6 +689,7 @@ $('analyzeBtn').onclick = async () => {
     draft.note = `추정 정확도: ${r.confidence}${r.note ? ` · ${r.note}` : ''}`;
     $('aiNote').textContent = draft.note;
     $('aiNote').classList.remove('hidden');
+    $('aiCandidates').classList.add('hidden');
     $('analyzeBtn').classList.add('hidden');
     $('saveEntry').classList.remove('hidden');
     $('entryForm').classList.remove('hidden');
@@ -599,6 +733,7 @@ $('openSettings').onclick = () => {
   $('keyInput').value = settings.apiKey;
   $('modelInput').value = settings.model;
   $('webInput').checked = settings.webSearch;
+  $('localAIInput').checked = settings.localAI;
   $('autoGoalInput').checked = settings.autoGoal;
   $('sexInput').value = settings.sex;
   $('birthInput').value = settings.birthYear;
@@ -635,6 +770,7 @@ $('closeSettings').onclick = () => {
   settings.apiKey = $('keyInput').value.trim();
   settings.model = $('modelInput').value;
   settings.webSearch = $('webInput').checked;
+  settings.localAI = $('localAIInput').checked;
   readProfileInputs();
   saveSettings();
   $('settingsSheet').classList.add('hidden');
