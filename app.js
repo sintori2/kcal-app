@@ -535,14 +535,19 @@ async function scanFood(dataUrl, onProgress = () => {}) {
     }
   }
   const found = new Map();
+  let votes = 0; // 사진 전체 1순위 음식이라고 본 칸 수
   for (let i = 0; i < wins.length; i++) {
     const [x, y, s] = wins[i];
     const best = (await predict(model, img, x, y, s, s)).reduce((a, b) => (b.p > a.p ? b : a));
+    if (best.name === whole[0].name) votes++;
     if (best.p >= 0.5 && !(found.get(best.name)?.p >= best.p)) found.set(best.name, best);
     if (i % 8 === 0) onProgress(Math.round((i / wins.length) * 100));
   }
   const dishes = [...found.values()].sort((a, b) => b.p - a.p).slice(0, 8);
-  return { whole, dishes };
+  // 한 음식 사진: 전체로 봐도 60% 이상이고, 칸들 중 25% 이상이 같은 음식이라고 봄
+  // (한상 사진을 통째로 보면 엉뚱한 음식으로 확신하는 경우가 있어 칸 투표로 한 번 더 확인)
+  const single = whole[0].p >= 0.6 && votes / wins.length >= 0.25;
+  return { whole, dishes, multi: dishes.length >= 2 && !single };
 }
 // AI Hub 음식 이름이 식약처 데이터와 다르게 적힌 것들
 const FOOD_ALIAS = {
@@ -594,12 +599,11 @@ async function runLocalAI() {
   $('analyzing').classList.remove('hidden');
   $('analyzeMsg').textContent = '내 AI가 보고 있어요…';
   try {
-    const { whole, dishes } = await scanFood(d.photo, (pct) => { $('analyzeMsg').textContent = `내 AI가 음식을 찾는 중… ${pct}%`; });
+    const { whole, dishes, multi } = await scanFood(d.photo, (pct) => { $('analyzeMsg').textContent = `내 AI가 음식을 찾는 중… ${pct}%`; });
     if (draft !== d) return;
     const box = $('aiCandidates');
     box.innerHTML = '';
-    // 사진 전체로 봐서 한 음식이라고 확신하면(60%↑) 한 음식, 아니면 여러 음식으로 봄
-    if (dishes.length >= 2 && whole[0].p < 0.6) {
+    if (multi) {
       // 여러 음식: 찾은 음식을 모두 넣고, 칩을 눌러 빼거나 다시 넣음
       const chosen = new Map();
       for (const c of dishes) {
@@ -656,8 +660,8 @@ let draft = null; // { id?, date, meal, items[], thumb, photo, createdAt, existi
 
 function openEntry({ entry, photo, thumb, items, title, barcode } = {}) {
   draft = entry
-    ? { ...entry, items: entry.items.map((i) => ({ ...i })), existing: true }
-    : { date: ymd(current), meal: guessMeal(), items: items || [], thumb: thumb || null, photo: photo || null, createdAt: Date.now(), existing: false, barcode };
+    ? { ...entry, people: entry.people || 1, items: entry.items.map((i) => unshareItem(i, entry.people || 1)), existing: true }
+    : { date: ymd(current), meal: guessMeal(), people: 1, items: items || [], thumb: thumb || null, photo: photo || null, createdAt: Date.now(), existing: false, barcode };
   if (!entry && ymd(current) !== ymd(new Date())) {
     // 지난 날짜에 추가할 때는 그날 정오 기준 시간으로 저장
     const d = new Date(current); d.setHours(12, 0, 0, 0); draft.createdAt = d.getTime();
@@ -692,14 +696,47 @@ function renderDraft() {
     b.onclick = () => { draft.meal = m; renderDraft(); };
     $('mealSeg').appendChild(b);
   }
+  $('peopleSeg').innerHTML = '';
+  for (const p of [1, 2, 3, 4, 5, 6]) {
+    const b = document.createElement('button');
+    b.textContent = p === 1 ? '혼자' : p === 6 ? '6명+' : `${p}명`;
+    b.className = p === (draft.people || 1) ? 'on' : '';
+    b.onclick = () => setPeople(p);
+    $('peopleSeg').appendChild(b);
+  }
+  const shared = (draft.people || 1) > 1;
+  $('itemsLabel').textContent = shared ? '음식 · 상 위 전체 양 · 전체 kcal' : '음식 · 양 · kcal';
   const rows = $('itemRows');
   rows.innerHTML = '';
   draft.items.forEach((it, idx) => {
     const wrap = document.createElement('div');
     wrap.className = 'item';
     wrap.innerHTML = `<div class="row"><input placeholder="음식 (검색)"><input placeholder="양"><input type="number" inputmode="numeric" placeholder="kcal"><button class="del" aria-label="삭제">✕</button></div>
-      <div class="src"></div><div class="suggest hidden"></div>`;
+      <div class="src"></div><div class="suggest hidden"></div>
+      <div class="share"><span class="mine"></span><div class="share-btns"></div></div>`;
     const [n, a, k] = wrap.querySelectorAll('input');
+    // 내 몫 고르기: 1/인원(자동) · 다 · 반 · 조금 · 직접 %
+    const sb = wrap.querySelector('.share-btns');
+    const opts = [[null, shared ? `1/${draft.people}` : '다'], ...(shared ? [[100, '다']] : []), [50, '반'], [25, '조금'], ['custom', '%']];
+    for (const [v, label] of opts) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      const cur = it.share == null ? null : it.share;
+      b.className = (v === null && cur == null) || (v !== null && v !== 'custom' && cur === v) || (v === 'custom' && cur != null && ![100, 50, 25].includes(cur)) ? 'on' : '';
+      b.onclick = () => {
+        if (v === 'custom') {
+          const x = parseFloat(prompt('내가 먹은 비율(%)을 입력해 주세요', String(Math.round(shareOf(it)))));
+          if (!(x >= 0)) return;
+          it.share = Math.min(100, x);
+        } else {
+          it.share = v ?? undefined;
+        }
+        it.shareAuto = v === null ? undefined : false;
+        renderDraft();
+      };
+      sb.appendChild(b);
+    }
+    wrap.querySelector('.share').classList.toggle('compact', !shared && it.share == null);
     const src = wrap.querySelector('.src');
     const sug = wrap.querySelector('.suggest');
     const showSrc = () => {
@@ -745,10 +782,49 @@ function renderDraft() {
   });
   updateSum();
 }
+// ---------- 여럿이 먹은 상: 음식마다 "상 위 전체 양"과 "내가 먹은 비율"을 따로 둠 ----------
+// 편집 중 item.kcal·carb… = 상 위 전체 값, item.share = 직접 고른 % (없으면 1/인원)
+// 저장할 땐 item.kcal… = 내가 먹은 값, item.full = 상 위 전체 값, item.share = 실제 %
+const shareOf = (it) => (it.share != null ? it.share : 100 / (draft?.people || 1));
+function eatenItem(it) {
+  const k = shareOf(it) / 100;
+  return {
+    ...it, share: Math.round(shareOf(it)),
+    full: { kcal: it.kcal || 0, carb: it.carb || 0, protein: it.protein || 0, fat: it.fat || 0, amount: it.amount },
+    kcal: Math.round((it.kcal || 0) * k), carb: r1((it.carb || 0) * k), protein: r1((it.protein || 0) * k), fat: r1((it.fat || 0) * k),
+  };
+}
+function unshareItem(it, people = 1) {
+  if (!it.full) return { ...it };
+  const auto = Math.abs(it.share - 100 / people) < 1;
+  return { ...it, ...it.full, share: auto ? undefined : it.share, shareAuto: auto ? undefined : false };
+}
+function setPeople(n) {
+  const prev = draft.people || 1;
+  draft.people = n;
+  for (const it of draft.items) {
+    // 내 AI는 음식을 1인분으로 잡으므로, 여럿이 먹은 상이면 인원수만큼 상 위 양을 늘림
+    if (it.source === '내AI' && it.per100) {
+      const grams = (parseFloat(String(it.amount).replace(/[^\d.]/g, '')) || 0) * (n / prev);
+      if (grams > 0) {
+        it.amount = `${Math.round(grams)}${/ml/.test(it.amount) ? 'ml' : 'g'}`;
+        scaleItem(it, grams);
+      }
+    }
+    if (it.shareAuto !== false) it.share = undefined;
+  }
+  renderDraft();
+}
 function updateSum() {
-  const m = sumMacros(draft.items);
-  $('entrySum').textContent = `${draft.items.reduce((s, i) => s + (i.kcal || 0), 0).toLocaleString()} kcal`;
-  $('entryMacro').textContent = `탄 ${Math.round(m.carb)}g · 단 ${Math.round(m.protein)}g · 지 ${Math.round(m.fat)}g`;
+  const eaten = draft.items.map(eatenItem);
+  const m = sumMacros(eaten);
+  const total = eaten.reduce((s, i) => s + i.kcal, 0);
+  $('entrySum').textContent = `${total.toLocaleString()} kcal`;
+  $('entryMacro').textContent = `${draft.people > 1 ? `${draft.people}명이 먹은 상에서 내 몫 · ` : ''}탄 ${Math.round(m.carb)}g · 단 ${Math.round(m.protein)}g · 지 ${Math.round(m.fat)}g`;
+  draft.items.forEach((it, i) => {
+    const el = document.querySelectorAll('#itemRows .mine')[i];
+    if (el) el.textContent = `내가 먹은 양 ${Math.round(shareOf(it))}% → ${eaten[i].kcal.toLocaleString()} kcal`;
+  });
 }
 function closeEntry() { $('entrySheet').classList.add('hidden'); draft = null; }
 
@@ -793,11 +869,11 @@ $('analyzeBtn').onclick = async () => {
 };
 
 $('saveEntry').onclick = async () => {
-  const items = draft.items.filter((i) => i.name.trim() || i.kcal);
+  const items = draft.items.filter((i) => i.name.trim() || i.kcal).map(eatenItem);
   if (!items.length) return toast('음식을 하나 이상 넣어 주세요.');
   const entry = {
     id: draft.id || crypto.randomUUID(),
-    date: draft.date, meal: draft.meal, items,
+    date: draft.date, meal: draft.meal, people: draft.people || 1, items,
     kcal: items.reduce((s, i) => s + (i.kcal || 0), 0),
     thumb: draft.thumb, note: draft.note || '', createdAt: draft.createdAt,
   };

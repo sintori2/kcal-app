@@ -118,6 +118,15 @@ header h1 { font-size: 20px; margin: 0; }
 .tag.t-웹검색 { background: #DCE8F7; color: #1F4F8A; }
 .tag.t-AI추정 { background: #FBE9CF; color: #8A5A12; }
 .cands { grid-template-columns: repeat(2, 1fr); margin-top: 12px; }
+.seg.people { grid-template-columns: repeat(6, 1fr); }
+.seg.people button { font-size: 13px; padding: 8px 0; }
+.share { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; margin: 4px 2px 0; }
+.share .mine { font-size: 12px; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.share-btns { display: flex; gap: 4px; margin-left: auto; }
+.share-btns button { font-size: 12px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 99px; white-space: nowrap; }
+.share-btns button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.share.compact .mine { display: none; }
+.share.compact { justify-content: flex-end; opacity: .7; }
 .cands button { font-size: 13px; padding: 9px 4px; }
 .tag.t-내AI { background: #FFE0D2; color: #9A3B12; }
 .tag.t-바코드, .tag.t-영양표 { background: #E9E1F7; color: #55358F; }
@@ -242,8 +251,12 @@ header h1 { font-size: 20px; margin: 0; }
         <label>끼니</label>
         <div class="seg" id="mealSeg"></div>
       </div>
+      <div class="field">
+        <label>같이 먹은 인원</label>
+        <div class="seg people" id="peopleSeg"></div>
+      </div>
       <div class="field items">
-        <label>음식 · 양 · kcal</label>
+        <label id="itemsLabel">음식 · 양 · kcal</label>
         <div id="itemRows"></div>
         <button class="btn" id="addItem" style="width:100%;padding:10px">+ 음식 추가</button>
       </div>
