@@ -218,14 +218,38 @@ async function renderTrend() {
 }
 
 // ---------- 사진 처리 ----------
-function loadImage(file) {
+function decodeImage(blob) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('사진을 열 수 없어요')); };
     img.src = url;
   });
+}
+// 갤럭시 "고효율 사진"·아이폰 기본 사진(HEIC/HEIF)은 크롬이 못 열어서 JPG로 바꿔 씀
+const HEIC_URL = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+let heicLib = null;
+async function heicToJpeg(file) {
+  heicLib ??= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = HEIC_URL;
+    s.onload = () => resolve(window.heic2any);
+    s.onerror = () => { heicLib = null; reject(new Error('HEIC 변환 도구를 불러오지 못했어요. 인터넷을 확인해 주세요.')); };
+    document.head.appendChild(s);
+  });
+  const out = await (await heicLib)({ blob: file, toType: 'image/jpeg', quality: 0.85 });
+  return Array.isArray(out) ? out[0] : out;
+}
+const looksHeic = (file) => /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || '');
+async function loadImage(file) {
+  try {
+    return await decodeImage(file);
+  } catch (e) {
+    if (!looksHeic(file) && file.type) throw e;
+    toast('HEIC 사진을 바꾸는 중…', 3000);
+    return decodeImage(await heicToJpeg(file));
+  }
 }
 function resized(img, maxSide, quality, square = false) {
   const c = document.createElement('canvas');
@@ -668,7 +692,7 @@ async function onPhoto(file) {
   try {
     const img = await loadImage(file);
     openEntry({ photo: resized(img, 1024, 0.82), thumb: resized(img, 160, 0.7, true) });
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(`${e.message} (${file.type || '형식 모름'}, ${(file.size / 1e6).toFixed(1)}MB)`, 5000); }
 }
 
 $('analyzeBtn').onclick = async () => {
@@ -953,7 +977,7 @@ async function onBarcodePhoto(file) {
     return $('labelInput').click();
   }
   try {
-    const img = await createImageBitmap(file);
+    const img = await createImageBitmap(await loadImage(file));
     const codes = await new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'] }).detect(img);
     if (!codes.length) return toast('바코드를 못 찾았어요. 바코드가 크게 나오게 다시 찍어 주세요.', 3500);
     await lookupBarcode(codes[0].rawValue);
